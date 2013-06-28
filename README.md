@@ -20,7 +20,7 @@ This fork of [I/O Docs](https://github.com/mashery/iodocs) includes minor code c
 
 I/O Docs - Open Source in Node.js
 =================================
-Copyright 2011 Mashery, Inc.
+Copyright 2012-2013 Mashery, Inc.
 
 [http://www.mashery.com](http://www.mashery.com)
 
@@ -29,7 +29,7 @@ Copyright 2011 Mashery, Inc.
 SYNOPSIS
 --------
 I/O Docs is a live interactive documentation system for RESTful web APIs. By defining APIs at the resource, method and parameter
-levels in a JSON schema, I/O Docs will generate a JavaScript client interface. API calls can be executed from this interface, which are then proxied through the I/O Docs server with payload data cleanly formatted (pretty-printed if JSON or XML).
+levels in a JSON schema, I/O Docs will generate a JavaScript client interface. API calls can be executed from this interface, which are then proxied through the I/O Docs server with payload data cleanly formatted (pretty-printed if JSON or XML). Basic HTML text tags are enabled in the JSON schema.
 
 You can find the latest version here: [https://github.com/mashery/iodocs](https://github.com/mashery/iodocs)
 
@@ -67,14 +67,36 @@ These will be automatically installed when you use any of the above *npm* instal
 3. [connect-redis](https://github.com/visionmedia/connect-redis) - Redis session store
 4. [querystring](https://github.com/visionmedia/node-querystring) - used to parse query string
 5. [jade](http://jade-lang.com/) - the view engine
+6. [supervisor](https://github.com/isaacs/node-supervisor) - restart node upon an error or changed javascript file
 
 Note: hashlib is no longer a required module -- we're using the internal crypto module for signatures and digests.
 
 RUNNING I/O DOCS
 ----------------
-1. You will need to copy *config.json.sample* to *config.json*. The defaults will work, but feel free to change them.
-2. node ./app.js
-3. Point your browser to: [http://localhost:3000](http://localhost:3000)
+**Create your config** file by copying the default config:
+
+```
+cp config.json.sample config.json
+```
+The defaults will work, but feel free to change them.
+
+**Start I/O Docs**:
+
+```
+npm start
+```
+
+**Point your browser** to: [localhost:3000](http://localhost:3000)
+
+
+BASIC AUTH FOR SERVER
+---------------------
+Enabling HTTP basic authentication on the server is simple. By default, the username and password values are empty ("").
+
+1. Open up *config.json*
+2. Navigate down to the *basicAuth* object
+3. Add values for username and password within the object
+
 
 QUICK API CONFIGURATION EXAMPLE
 -------------------------------
@@ -91,7 +113,11 @@ Example:
     "baseURL": "api.lowercase.sample.com",
     "publicPath": "/v1",
     "auth": "key",
-    "keyParam": "api_key_var_name"
+    "keyParam": "api_key_var_name",
+    "headers": {
+                "Accept": "application/json",
+                "Foo": "bar"
+    }
 }
 ```
 
@@ -135,12 +161,16 @@ The *apiconfig.json* file contains high-level information about an API.
 
 ```js
 "lower": {
-   "name": "My API",
-   "protocol": "http",
-   "baseURL": "api.lowercase.sample.com",
-   "publicPath": "/v1",
-   "auth": "key",
-   "keyParam": "api_key_var_name"
+    "name": "My API",
+    "protocol": "http",
+    "baseURL": "api.lowercase.sample.com",
+    "publicPath": "/v1",
+    "auth": "key",
+    "keyParam": "api_key_var_name",
+    "headers": {
+                "Accept": "application/json",
+                "Foo": "bar"
+    }
 }
 ```
 
@@ -176,9 +206,13 @@ Line:
 
 7. "keyParam" key value is name of the query parameter that
     is added to an API request when the "auth" key value from
-    (5) is set to "key"
+    (5) is set to "key".
 
-8. Closing curly-bracket ;)
+8. "headers" object contains key value pairs of HTTP headers
+    that will be sent for each request for API. These are
+    static key/value pairs.
+
+12. Closing curly-bracket ;)
 
 
 ---
@@ -273,12 +307,12 @@ Line:
     "oauth" : {
        "type": "three-legged",
        "requestURL": "https://api.twitter.com/oauth/request_token",
-       "signinURL": "https://api.twitter.com/oauth/authorize?oauth_token="
+       "signinURL": "https://api.twitter.com/oauth/authorize?oauth_token=",
        "accessURL": "https://api.twitter.com/oauth/access_token",
        "version": "1.0",
-       "crypt": "HMAC-SHA1",
-   }
-   "keyParam": "",
+       "crypt": "HMAC-SHA1"
+   },
+   "keyParam": ""
 }
 ```
 

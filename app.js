@@ -38,29 +38,26 @@ var express     = require('express'),
 
 // Configuration
 try {
-    var configJSON = fs.readFileSync(__dirname + "/config.json");
-    var config = JSON.parse(configJSON.toString());
+    var config = require('./config.json');
 } catch(e) {
     console.error("File config.json not found or is invalid.  Try: `cp config.json.sample config.json`");
     process.exit(1);
-}
-
-// CORE UPDATE: update config object to use Heroku RedisToGo
-if (process.env.REDISTOGO_URL) {
-	// use production (Heroku) redis configuration
-	// overwrite `config` to keep it simple
-	var rtg = require('url').parse(process.env.REDISTOGO_URL);
-	config.redis.port = rtg.port;
-	config.redis.host = rtg.hostname;
-	config.redis.password = rtg.auth.split(":")[1];
 }
 
 //
 // Redis connection
 //
 var defaultDB = '0';
-var db = redis.createClient(config.redis.port, config.redis.host);
-db.auth(config.redis.password);
+var db;
+
+if (process.env.REDISTOGO_URL) {
+    var rtg   = require("url").parse(process.env.REDISTOGO_URL);
+    db = require("redis").createClient(rtg.port, rtg.hostname);
+    db.auth(rtg.auth.split(":")[1]);
+} else {
+    db = redis.createClient(config.redis.port, config.redis.host);
+    db.auth(config.redis.password);
+}
 
 db.on("error", function(err) {
     if (config.debug) {
@@ -71,16 +68,25 @@ db.on("error", function(err) {
 //
 // Load API Configs
 //
-var apisConfig;
-fs.readFile(__dirname + '/public/data/apiconfig.json', 'utf-8', function(err, data) {
-    if (err) throw err;
-    apisConfig = JSON.parse(data);
+
+try {
+    var apisConfig = require('./public/data/apiconfig.json');
     if (config.debug) {
-         console.log(util.inspect(apisConfig));
+        console.log(util.inspect(apisConfig));
     }
-});
+} catch(e) {
+    console.error("File apiconfig.json not found or is invalid.");
+    process.exit(1);
+}
 
 var app = module.exports = express.createServer();
+
+if (process.env.REDISTOGO_URL) {
+    var rtg   = require("url").parse(process.env.REDISTOGO_URL);
+    config.redis.host = rtg.hostname;
+    config.redis.port = rtg.port;
+    config.redis.password = rtg.auth.split(":")[1];
+}
 
 app.configure(function() {
     app.set('views', __dirname + '/views');
@@ -99,6 +105,14 @@ app.configure(function() {
         })
     }));
 
+    // Global basic authentication on server (applied if configured)
+    if (config.basicAuth && config.basicAuth.username && config.basicAuth.password) {
+        app.use(express.basicAuth(function(user, pass, callback) {
+            var result = (user === config.basicAuth.username && pass === config.basicAuth.password);
+            callback(null /* error */, result);
+        }));
+    }
+
     app.use(app.router);
 
     app.use(express.static(__dirname + '/public'));
@@ -116,25 +130,25 @@ app.configure('production', function() {
 // Middleware
 //
 function oauth(req, res, next) {
+    console.log('OAuth process started');
     var apiName = req.body.apiName,
         apiConfig = apisConfig[apiName];
 
-    if (apiConfig.auth.oauth) {
-    	console.log('OAuth process started');
-        var apiKey = req.body.oauthKey,
-            apiSecret = req.body.oauthSecret,
+    if (apiConfig.oauth) {
+        var apiKey = req.body.apiKey || req.body.key,
+            apiSecret = req.body.apiSecret || req.body.secret,
             refererURL = url.parse(req.headers.referer),
             callbackURL = refererURL.protocol + '//' + refererURL.host + '/authSuccess/' + apiName,
-            oa = new OAuth(apiConfig.auth.oauth.requestURL,
-                           apiConfig.auth.oauth.accessURL,
+            oa = new OAuth(apiConfig.oauth.requestURL,
+                           apiConfig.oauth.accessURL,
                            apiKey,
                            apiSecret,
-                           apiConfig.auth.oauth.version,
+                           apiConfig.oauth.version,
                            callbackURL,
-                           apiConfig.auth.oauth.crypt);
+                           apiConfig.oauth.crypt);
 
         if (config.debug) {
-            console.log('OAuth type: ' + apiConfig.auth.oauth.type);
+            console.log('OAuth type: ' + apiConfig.oauth.type);
             console.log('Method security: ' + req.body.oauth);
             console.log('Session authed: ' + req.session[apiName]);
             console.log('apiKey: ' + apiKey);
@@ -142,7 +156,7 @@ function oauth(req, res, next) {
         };
 
         // Check if the API even uses OAuth, then if the method requires oauth, then if the session is not authed
-        if (apiConfig.auth.oauth.type == 'three-legged' && req.body.oauth == 'authrequired' && (!req.session[apiName] || !req.session[apiName].authed) ) {
+        if (apiConfig.oauth.type == 'three-legged' && req.body.oauth == 'authrequired' && (!req.session[apiName] || !req.session[apiName].authed) ) {
             if (config.debug) {
                 console.log('req.session: ' + util.inspect(req.session));
                 console.log('headers: ' + util.inspect(req.headers));
@@ -173,10 +187,10 @@ function oauth(req, res, next) {
                     db.expire(key + ':requestTokenSecret', 1209600000);
 
                     // res.header('Content-Type', 'application/json');
-                    res.send({ 'signin': apiConfig.auth.oauth.signinURL + oauthToken });
+                    res.send({ 'signin': apiConfig.oauth.signinURL + oauthToken });
                 }
             });
-        } else if (apiConfig.auth.oauth.type == 'two-legged' && req.body.oauth == 'authrequired') {
+        } else if (apiConfig.oauth.type == 'two-legged' && req.body.oauth == 'authrequired') {
             // Two legged stuff... for now nothing.
             next();
         } else {
@@ -226,13 +240,13 @@ function oauthSuccess(req, res, next) {
             console.log(util.inspect(">>"+req.query.oauth_verifier));
         };
 
-        var oa = new OAuth(apiConfig.auth.oauth.requestURL,
-                           apiConfig.auth.oauth.accessURL,
+        var oa = new OAuth(apiConfig.oauth.requestURL,
+                           apiConfig.oauth.accessURL,
                            apiKey,
                            apiSecret,
-                           apiConfig.auth.oauth.version,
+                           apiConfig.oauth.version,
                            null,
-                           apiConfig.auth.oauth.crypt);
+                           apiConfig.oauth.crypt);
 
         if (config.debug) {
             console.log(util.inspect(oa));
@@ -270,23 +284,32 @@ function processRequest(req, res, next) {
         console.log(util.inspect(req.body, null, 3));
     };
 
-    var params = req.body.params || {},
-        paramTypes = req.body.paramTypes || {},
-        methodURL = req.body.methodUri,
-        httpMethod = req.body.httpMethod,
-        dataFormat = req.body.dataFormat,
-        apiKey = req.body.apiKey,
-        apiName = req.body.apiName
+    var reqQuery = req.body,
+        customHeaders = {},
+        params = reqQuery.params || {},
+        locations = reqQuery.locations || {},
+        methodURL = reqQuery.methodUri,
+        httpMethod = reqQuery.httpMethod,
+        apiKey = reqQuery.apiKey,
+        apiSecret = reqQuery.apiSecret,
+        apiName = reqQuery.apiName
         apiConfig = apisConfig[apiName],
-        key = req.sessionID + ':' + apiName,
-        baseHostInfo = apiConfig.baseURL.split(':'),
-        baseHostUrl = baseHostInfo[0],
-        baseHostPort = (baseHostInfo.length > 1) ? baseHostInfo[1] : "";
-        
+        key = req.sessionID + ':' + apiName;
 
-    // Update params
+    // Extract custom headers from the params
+    for( var param in params ) 
+    {
+         if (params.hasOwnProperty(param)) 
+         {
+            if (params[param] !== '' && locations[param] == 'header' ) 
+            {
+                customHeaders[param] = params[param];
+                delete params[param];
+            }
+         }
+    }
+
     // Replace placeholders in the methodURL with matching params
-    // TODO: needs to be recursive for new nested parameters
     for (var param in params) {
         if (params.hasOwnProperty(param)) {
             if (params[param] !== '') {
@@ -298,51 +321,41 @@ function processRequest(req, res, next) {
                     methodURL = methodURL.replace(regx, params[param]);
                     delete params[param]
                 }
-                else if (paramTypes[param] == 'json') {
-                	params[param] = JSON.parse(params[param])
-                }
-                else if (paramTypes[param] == 'list') {
-                	params[param] = params[param].split(',');
-                }
-            }
-            else {
+            } else {
                 delete params[param]; // Delete blank params
             }
         }
     }
 
-    var privateReqURL = apiConfig.protocol + '://' + apiConfig.baseURL + apiConfig.privatePath + methodURL,
-    options = {
-    		headers: {},
-    		protocol: apiConfig.protocol + ':',
-    		host: baseHostUrl,
-    		port: baseHostPort,
-    		method: httpMethod,
-    		path: apiConfig.publicPath + methodURL
-    };
+    var baseHostInfo = apiConfig.baseURL.split(':');
+    var baseHostUrl = baseHostInfo[0],
+        baseHostPort = (baseHostInfo.length > 1) ? baseHostInfo[1] : "";
+    var headers = {};
+    for( header in apiConfig.headers )
+        headers[header] = apiConfig.headers[header];
+    for( header in customHeaders )
+        headers[header] = customHeaders[header];
 
-    // TODO: use case for privateReqURL vs. options.path
-    if (httpMethod == 'GET' && Object.keys(params).length) {
-    	privateReqURL += '?' + query.stringify(params);
-    	options.path += '?' + query.stringify(params);
-    }
-    
-    
-    // Add API Key to params, if any.
-    if (apiKey) {
-        if (options.method == 'GET' || options.method == 'DELETE' || apiConfig.auth.key.forceQueryString) {
-            options.path += (options.path.indexOf('?') === -1 ? '?' : '&') + apiConfig.auth.key.param + '=' + apiKey;
-        }
-        else {
-        	params[apiConfig.auth.key.param] = apiKey 
-        }   
+    var paramString = query.stringify(params),
+        privateReqURL = apiConfig.protocol + '://' + apiConfig.baseURL + apiConfig.privatePath + methodURL + ((paramString.length > 0) ? '?' + paramString : ""),
+        options = {
+            headers: headers,
+            protocol: apiConfig.protocol + ':',
+            host: baseHostUrl,
+            port: baseHostPort,
+            method: httpMethod,
+            path: apiConfig.publicPath + methodURL// + ((paramString.length > 0) ? '?' + paramString : "")
+        };
+
+    if (['POST','DELETE','PUT'].indexOf(httpMethod) !== -1) {
+        var requestBody = query.stringify(params);
     }
 
-    if (apiConfig.auth.oauth) {
+    if (apiConfig.oauth) {
         console.log('Using OAuth');
 
         // Three legged OAuth
-        if (apiConfig.auth.oauth.type == 'three-legged' && (req.body.oauth == 'authrequired' || (req.session[apiName] && req.session[apiName].authed))) {
+        if (apiConfig.oauth.type == 'three-legged' && (reqQuery.oauth == 'authrequired' || (req.session[apiName] && req.session[apiName].authed))) {
             if (config.debug) {
                 console.log('Three Legged OAuth');
             };
@@ -354,8 +367,8 @@ function processRequest(req, res, next) {
                 ],
                 function(err, results) {
 
-                    var apiKey = (typeof req.body.apiKey == "undefined" || req.body.apiKey == "undefined")?results[0]:req.body.apiKey,
-                        apiSecret = (typeof req.body.apiSecret == "undefined" || req.body.apiSecret == "undefined")?results[1]:req.body.apiSecret,
+                    var apiKey = (typeof reqQuery.apiKey == "undefined" || reqQuery.apiKey == "undefined")?results[0]:reqQuery.apiKey,
+                        apiSecret = (typeof reqQuery.apiSecret == "undefined" || reqQuery.apiSecret == "undefined")?results[1]:reqQuery.apiSecret,
                         accessToken = results[2],
                         accessTokenSecret = results[3];
                     console.log(apiKey);
@@ -363,13 +376,13 @@ function processRequest(req, res, next) {
                     console.log(accessToken);
                     console.log(accessTokenSecret);
                     
-                    var oa = new OAuth(apiConfig.auth.oauth.requestURL || null,
-                                       apiConfig.auth.oauth.accessURL || null,
+                    var oa = new OAuth(apiConfig.oauth.requestURL || null,
+                                       apiConfig.oauth.accessURL || null,
                                        apiKey || null,
                                        apiSecret || null,
-                                       apiConfig.auth.oauth.version || null,
+                                       apiConfig.oauth.version || null,
                                        null,
-                                       apiConfig.auth.oauth.crypt);
+                                       apiConfig.oauth.crypt);
 
                     if (config.debug) {
                         console.log('Access token: ' + accessToken);
@@ -380,10 +393,7 @@ function processRequest(req, res, next) {
                     oa.getProtectedResource(privateReqURL, httpMethod, accessToken, accessTokenSecret,  function (error, data, response) {
                         req.call = privateReqURL;
 
-						if (config.debug) {
-						    console.log(util.inspect(response));
-						}
-
+                        // console.log(util.inspect(response));
                         if (error) {
                             console.log('Got error: ' + util.inspect(error));
 
@@ -405,7 +415,7 @@ function processRequest(req, res, next) {
                     });
                 }
             );
-        } else if (apiConfig.auth.oauth.type == 'two-legged' && req.body.oauth == 'authrequired') { // Two-legged
+        } else if (apiConfig.oauth.type == 'two-legged' && reqQuery.oauth == 'authrequired') { // Two-legged
             if (config.debug) {
                 console.log('Two Legged OAuth');
             };
@@ -415,9 +425,9 @@ function processRequest(req, res, next) {
                                null,
                                apiKey || null,
                                apiSecret || null,
-                               apiConfig.auth.oauth.version || null,
+                               apiConfig.oauth.version || null,
                                null,
-                               apiConfig.auth.oauth.crypt);
+                               apiConfig.oauth.crypt);
 
             var resource = options.protocol + '://' + options.host + options.path,
                 cb = function(error, data, response) {
@@ -491,88 +501,75 @@ function processRequest(req, res, next) {
     function unsecuredCall() {
         console.log('Unsecured Call');
 
+        if (['POST','PUT','DELETE'].indexOf(httpMethod) === -1) {
+            options.path += ((paramString.length > 0) ? '?' + paramString : "");
+        }
+
+        // Add API Key to params, if any.
+        if (apiKey != '' && apiKey != 'undefined' && apiKey != undefined) {
+            if (options.path.indexOf('?') !== -1) {
+                options.path += '&';
+            }
+            else {
+                options.path += '?';
+            }
+            options.path += apiConfig.keyParam + '=' + apiKey;
+        }
+
         // Perform signature routine, if any.
         if (apiConfig.signature) {
             if (apiConfig.signature.type == 'signed_md5') {
                 // Add signature parameter
                 var timeStamp = Math.round(new Date().getTime()/1000);
-                var sig = crypto.createHash('md5').update('' + apiKey + req.body.signature + timeStamp + '').digest(apiConfig.signature.digest);
+                var sig = crypto.createHash('md5').update('' + apiKey + apiSecret + timeStamp + '').digest(apiConfig.signature.digest);
                 options.path += '&' + apiConfig.signature.sigParam + '=' + sig;
             }
             else if (apiConfig.signature.type == 'signed_sha256') { // sha256(key+secret+epoch)
                 // Add signature parameter
                 var timeStamp = Math.round(new Date().getTime()/1000);
-                var sig = crypto.createHash('sha256').update('' + apiKey + req.body.signature + timeStamp + '').digest(apiConfig.signature.digest);
+                var sig = crypto.createHash('sha256').update('' + apiKey + apiSecret + timeStamp + '').digest(apiConfig.signature.digest);
                 options.path += '&' + apiConfig.signature.sigParam + '=' + sig;
             }
         }
-        
-        // add cookie to header, if any...
-        if (apiConfig.auth.cookie) {
+
+        // Setup headers, if any
+        if (reqQuery.headerNames && reqQuery.headerNames.length > 0) {
             if (config.debug) {
-                console.log('Setting cookie: ' + apiConfig.auth.cookie.name + '=' + req.body.cookieValue);
+                console.log('Setting headers');
+            };
+            var headers = {};
+
+            for (var x = 0, len = reqQuery.headerNames.length; x < len; x++) {
+                if (config.debug) {
+                  console.log('Setting header: ' + reqQuery.headerNames[x] + ':' + reqQuery.headerValues[x]);
+                };
+                if (reqQuery.headerNames[x] != '') {
+                    headers[reqQuery.headerNames[x]] = reqQuery.headerValues[x];
+                }
             }
 
-            if (options.headers['Cookie']) {
-            	options.headers['Cookie'] += '; ' + apiConfig.auth.cookie.name + '=' + req.body.cookieValue;
+            options.headers = headers;
+        }
+        if(options.headers === void 0){
+            options.headers = {}
+        }
+        if (!options.headers['Content-Length']) {
+            if (requestBody) {
+                options.headers['Content-Length'] = requestBody.length;
             }
             else {
-            	options.headers['Cookie'] = apiConfig.auth.cookie.name + '=' + req.body.cookieValue;
-            }
-        }        
-
-        // Setup headers, if any...
-        // NOTE: priority is: global, resource, code
-        if (apiConfig.auth.header && apiConfig.auth.header.length > 0) {
-        	for (index in apiConfig.auth.header) {
-        		var header = apiConfig.auth.header[index];
-        		
-                if (req.body.headers[header.name]) {
-                    if (config.debug) {
-                        console.log('Setting header: ' + header.name + ':' + req.body.headers[header.name]);
-                    }
-
-                	options.headers[header.name] = req.body.headers[header.name];
-                }
-            }
-        }
-        
-        
-        if (req.body.headerNames && req.body.headerNames.length > 0) {
-            for (var x = 0, len = req.body.headerNames.length; x < len; x++) {
-                if (req.body.headerNames[x] != '') {
-                    if (config.debug) {
-                        console.log('Setting header: ' + req.body.headerNames[x] + ':' + req.body.headerValues[x]);
-                    }
-
-                	options.headers[req.body.headerNames[x]] = req.body.headerValues[x];
-                }
-            }
-        }
-        
-        var sendData = ''
-        if (options.method == 'GET' || options.method == 'DELETE') {
-            if (!options.headers['Content-Length']) {
                 options.headers['Content-Length'] = 0;
             }
         }
-        else if (options.method == 'POST' || options.method == 'PUT') {
-            if (dataFormat && dataFormat == 'json') {
-                options.headers['Content-Type'] = 'application/json';
-                sendData = JSON.stringify(params)
-            }
-            else {
-                options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
-                sendData = query.stringify(params);
-            }
+
+        if (!options.headers['Content-Type'] && requestBody) {
+            options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
         }
 
-        console.log(util.inspect(params));
-        
         if (config.debug) {
             console.log(util.inspect(options));
         };
-        
+
         var doRequest;
         if (options.protocol === 'https' || options.protocol === 'https:') {
             console.log('Protocol: HTTPS');
@@ -636,13 +633,8 @@ function processRequest(req, res, next) {
             };
         });
 
-        if (sendData.length) {
-            if (config.debug) {
-                console.log("Request Body: " + sendData) 
-            }
-
-            options.headers['Content-Length'] = Buffer.byteLength(sendData);
-            apiCall.end(sendData, 'utf-8');
+        if (requestBody) {
+            apiCall.end(requestBody, 'utf-8');
         }
         else {
             apiCall.end();
@@ -686,8 +678,7 @@ app.dynamicHelpers({
     },
     apiDefinition: function(req, res) {
         if (req.params.api) {
-            var data = fs.readFileSync(__dirname + '/public/data/' + req.params.api + '.json');
-            return JSON.parse(data);
+            return require(__dirname + '/public/data/' + req.params.api + '.json');
         }
     }
 })
@@ -729,34 +720,18 @@ app.post('/upload', function(req, res) {
   res.redirect('back');
 });
 
-app.all(/^\/service(?:\/(\d+))?$/, function(req, res) {
-	var response = {
-		'request': {
-			'url': req.url,
-			'method': req.method.toUpperCase(),
-			'timestamp': Math.round(+new Date() / 1000),
-		},
-		'parameters': null
-	}
-
-	response.parameters = response.request.method == 'GET' ? url.parse(req.url, true).query : req.body;
-	if (req.params[0]) {
-		response.parameters['id'] = req.params[0];
-	}
-
-	res.send(JSON.stringify(response));
-});
-
 // API shortname, all lowercase
 app.get('/:api([^\.]+)', function(req, res) {
     req.params.api=req.params.api.replace(/\/$/,'');
     res.render('api');
 });
 
-
 // Only listen on $ node app.js
+
 if (!module.parent) {
     var port = process.env.PORT || config.port;
-    app.listen(port);
-    console.log("Express server listening on port %d", app.address().port);
+    var l = app.listen(port);
+    l.on('listening', function(err) {
+        console.log("Express server listening on port %d", app.address().port);
+    });
 }

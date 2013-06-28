@@ -1,31 +1,20 @@
 {
     "klout": {
-        "name": "Klout API",
+        "name": "Klout v2 API",
         "protocol": "http",
         "baseURL": "api.klout.com",
-        "publicPath": "/1",
-        "auth": {
-            "key": {
-                "param": "key"
-            }
-        }
-    },
-    "fanfeedr": {
-        "name": "FanFeedr Sports Basic API",
-        "protocol": "http",
-        "baseURL": "ffapi.fanfeedr.com",
-        "publicPath": "",
-        "auth": {
-            "key": {
-                "param": "api_key"
-            }
-        }
+        "publicPath": "/v2",
+        "headers" : {},
+        "auth": "key",
+        "keyParam": "key"
     },
     "usatoday": {
         "name": "USA TODAY Census API",
         "protocol": "http",
         "baseURL": "api.usatoday.com",
-        "publicPath": "/open"
+        "publicPath": "/open",
+        "auth": "key",
+        "keyParam": "api_key"
     },
     "linkedin": {
         "name": "LinkedIn",
@@ -33,28 +22,27 @@
         "baseURL": "api.linkedin.com",
         "publicPath": "",
         "privatePath": "/v1",
-        "auth": {
-            "oauth": {
-                "type": "three-legged",
-                "requestURL": "https://api.linkedin.com/uas/oauth/requestToken",
-                "signinURL": "https://api.linkedin.com/uas/oauth/authorize?oauth_token=",
-                "accessURL": "https://api.linkedin.com/uas/oauth/accessToken",
-                "version": "1.0",
-                "crypt": "HMAC-SHA1"
-            }
-        }
+        "auth": "oauth",
+        "oauth": {
+            "type": "three-legged",
+            "requestURL": "https://api.linkedin.com/uas/oauth/requestToken",
+            "signinURL":  "https://api.linkedin.com/uas/oauth/authorize?oauth_token=",
+            "accessURL":  "https://api.linkedin.com/uas/oauth/accessToken",
+            "version": "1.0",
+            "crypt": "HMAC-SHA1"
+        },
+        "keyParam":""
     },
-    "simplegeo": {
-        "name": "SimpleGeo",
+    "requestbin": {
+        "name": "Requestb.in",
         "protocol": "http",
-        "baseURL": "api.simplegeo.com",
-        "publicPath": "",
-        "auth": {
-            "oauth": {
-                "type": "two-legged",
-                "version": "1.0",
-                "crypt": "HMAC-SHA1"
-            }
-        }
-    }
+        "baseURL": "requestb.in",
+        "publicPath": "/"
+    },
+	"ayi": {
+	    "name": "AYI",
+	    "protocol": "http",
+	    "baseURL": "jmccreary-data.test.ayi.com",
+	    "publicPath": "/profile"
+	}
 }
